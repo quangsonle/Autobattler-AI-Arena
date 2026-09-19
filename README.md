@@ -107,7 +107,7 @@ How to break it:
 * Find your own solutions :)
 
 
-Write to me if you need any support or simply want a match for your trained:
+Write to me if you need any support or simply want a match for your trained pets:
 
 
 [Linkedin](https://www.linkedin.com/in/s%C6%A1n-l%C3%AA-24a593176/)
