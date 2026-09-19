@@ -105,3 +105,11 @@ How to break it:
 * Solution A (Imitation): Play Single Player against the camper. Use the Jiggle-Peek tactic (wait in safety, step in right as your gun fires, and step back). Record 2 minutes of this and run Imitation Training. The clone learns how to snipe campers!
 * Solution B (Curiosity): In Options, set Exploration Rate to more than 50%. In the Sparring Gym, the bot will occasionally take a random step away from the wall. The moment it steps toward the center, press SPACE and press 5 to reward it!
 * Find your own solutions :)
+
+
+Write to me if you need any support or simply want a match for your trained:
+
+
+[Linkedin](https://www.linkedin.com/in/s%C6%A1n-l%C3%AA-24a593176/)
+
+[Email](officialquangsonle@gmail.com)
