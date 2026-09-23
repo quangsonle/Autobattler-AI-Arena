@@ -28,7 +28,7 @@ The game takes place on a vertical court (50 columns wide by 300 rows long):
 
 2. Install the required libraries:
    * Open your game folder in Windows File Explorer.
-   * Click the folder path bar at the top, type cmd, and press Enter. Or right-click and select Open Terminal.
+   * Click the folder path bar at the top, type cmd, and press Enter, or right-click and select Open Terminal. In any case, make sure you are in the game directory where requirements.txt is located.
    * In the black window, type:
      pip install -r requirements.txt
    * Press Enter and close the window once it finishes.
