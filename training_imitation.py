@@ -50,7 +50,30 @@ def augment_mirror_data(states_np, moves_np):
     
     return aug_states, aug_moves
 
-def train_imitation():
+class TrainingCancelled(Exception):
+    """Raised when the UI requests cancellation before checkpoint saving."""
+
+
+def train_imitation(progress_callback=None, cancel_event=None):
+    """Train from logs, optionally reporting (fraction, message) to a caller.
+
+    The callback runs on the training thread and must not call Pygame APIs.
+    """
+    last_report = 0.0
+
+    def check_cancelled():
+        if cancel_event is not None and cancel_event.is_set():
+            raise TrainingCancelled()
+
+    def report(fraction, message, force=False):
+        nonlocal last_report
+        check_cancelled()
+        now = time.monotonic()
+        if progress_callback is not None and (force or now - last_report >= 0.1):
+            progress_callback(fraction, message)
+            last_report = now
+
+    report(0.0, "Finding behavior logs...", force=True)
     params = load_hyperparams()
     records = glob.glob("recordings/*.npz")
     if not records:
@@ -58,10 +81,15 @@ def train_imitation():
         return None
 
     raw_states, raw_moves = [], []
-    for r in records:
-        data = np.load(r)
-        raw_states.append(data['states'])
-        raw_moves.append(data['move_actions'])
+    for index, r in enumerate(records):
+        check_cancelled()
+        with np.load(r) as data:
+            raw_states.append(data['states'])
+            raw_moves.append(data['move_actions'])
+        report(0.1 * (index + 1) / len(records),
+               f"Loading logs: {index + 1}/{len(records)}")
+
+    report(0.1, "Preparing mirrored training data...", force=True)
 
     base_states = np.concatenate(raw_states)
     base_moves = np.concatenate(raw_moves)
@@ -72,7 +100,10 @@ def train_imitation():
     states = torch.tensor(aug_states, dtype=torch.float32)
     moves = torch.tensor(aug_moves, dtype=torch.int64)
 
+    check_cancelled()
     total_samples = len(states)
+    if total_samples == 0:
+        raise ValueError("Behavior logs contain no training frames.")
     print(f"\n[Imitation] Base frames: {len(base_states)} -> Augmented dataset: {total_samples} frames (Exact 50/50 Symmetry)")
 
     dataset = TensorDataset(states, moves)
@@ -85,11 +116,16 @@ def train_imitation():
 
     model.train()
     epochs = params["imitation_epochs"]
+    if epochs < 1:
+        raise ValueError("Training epochs must be at least 1.")
+    total_batches = epochs * len(loader)
+    report(0.15, f"Training for {epochs} epochs...", force=True)
     for ep in range(epochs):
         total_loss = 0.0
         correct_move = 0
 
-        for b_states, b_moves in loader:
+        for batch_index, (b_states, b_moves) in enumerate(loader):
+            check_cancelled()
             optimizer.zero_grad()
             m_logits, _ = model(b_states)
             loss = criterion(m_logits, b_moves)
@@ -98,6 +134,9 @@ def train_imitation():
 
             total_loss += loss.item()
             correct_move += (torch.argmax(m_logits, dim=-1) == b_moves).sum().item()
+            completed = ep * len(loader) + batch_index + 1
+            report(0.15 + 0.8 * completed / total_batches,
+                   f"Epoch {ep + 1}/{epochs} - Batch {batch_index + 1}/{len(loader)}")
 
         avg_loss = total_loss / len(loader)
         move_acc = (correct_move / total_samples) * 100.0
@@ -105,6 +144,7 @@ def train_imitation():
         if (ep + 1) % max(1, epochs // 6) == 0 or (ep + 1) == epochs:
             print(f"  Epoch [{ep+1:2d}/{epochs}] - Loss: {avg_loss:.4f} | Symmetrical Accuracy: {move_acc:.1f}%")
 
+    report(0.95, "Saving trained model...", force=True)
     os.makedirs("saved_models", exist_ok=True)
     out_path = f"saved_models/imitation_model_{int(time.time())}.pt"
     torch.save(model.state_dict(), out_path)
@@ -112,6 +152,9 @@ def train_imitation():
     # Also save over finetuned_model.pt so all modes use the balanced baseline
     torch.save(model.state_dict(), "saved_models/finetuned_model.pt")
     print(f"[Imitation] Successfully saved balanced model to:\n  -> {out_path}\n")
+    # Saving is allowed to finish even if cancellation arrives during writes.
+    if progress_callback is not None:
+        progress_callback(1.0, "Training complete")
     return out_path
 
 if __name__ == "__main__":
