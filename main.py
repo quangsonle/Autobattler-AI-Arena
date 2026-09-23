@@ -1,6 +1,8 @@
 import os
 import sys
 import glob
+import queue
+import threading
 import pygame
 import torch
 from config import *
@@ -8,7 +10,7 @@ from engine import GameEngine
 from model import ActorCritic
 from greedy_ai import GreedyAI
 from recorder import BehaviorRecorder
-from training_imitation import train_imitation
+from training_imitation import train_imitation, TrainingCancelled
 from training_interactive import InteractiveTrainer
 from options import show_options_menu
 
@@ -235,6 +237,78 @@ def run_trainer_gui(base_model=None, opponent="greedy"):
         trainer.draw()
         pygame.display.flip()
 
+def run_imitation_gui():
+    """Keep all SDL work on the main thread while training runs separately."""
+    updates = queue.SimpleQueue()
+    cancel_event = threading.Event()
+
+    def train():
+        try:
+            path = train_imitation(
+                progress_callback=lambda fraction, message: updates.put(
+                    ("progress", fraction, message)),
+                cancel_event=cancel_event,
+            )
+            message = (f"Model saved: {os.path.basename(path)}" if path
+                       else "No logs found to train! Play Mode 2 or 3 first.")
+            updates.put(("done", 1.0 if path else 0.0, message))
+        except TrainingCancelled:
+            updates.put(("done", None, "Training cancelled."))
+        except Exception as exc:
+            updates.put(("done", None, f"Training failed: {exc}"))
+
+    worker = threading.Thread(target=train, name="imitation-training", daemon=True)
+    worker.start()
+    fraction, message = 0.0, "Starting training..."
+    finished = False
+    while True:
+        clock.tick(TPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                cancel_event.set()
+                return None
+            if event.type == pygame.KEYDOWN:
+                if finished and event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
+                    return message
+                if event.key == pygame.K_ESCAPE:
+                    cancel_event.set()
+
+        while True:
+            try:
+                kind, progress, message = updates.get_nowait()
+            except queue.Empty:
+                break
+            if progress is not None:
+                fraction = progress
+            if kind == "done":
+                finished = True
+
+        screen.fill(COLOR_BG)
+        screen.blit(title_font.render("TRAINING ON LOGS", True, COLOR_PLAYER_A), (50, 80))
+        bar = pygame.Rect(50, 220, SCREEN_WIDTH - 100, 30)
+        pygame.draw.rect(screen, COLOR_PANEL, bar)
+        fill = bar.copy()
+        fill.width = int(bar.width * max(0.0, min(1.0, fraction)))
+        pygame.draw.rect(screen, COLOR_ACCENT, fill)
+        screen.blit(font.render(f"{fraction:.0%}", True, COLOR_TEXT), (50, 265))
+        # Wrap errors and long file names to keep the result visible.
+        words = message.split()
+        line, y = "", 320
+        for word in words:
+            candidate = f"{line} {word}".strip()
+            if line and font.size(candidate)[0] > SCREEN_WIDTH - 100:
+                screen.blit(font.render(line, True, COLOR_TEXT), (50, y))
+                line, y = word, y + 26
+            else:
+                line = candidate
+        screen.blit(font.render(line, True, COLOR_TEXT), (50, y))
+        hint = ("[ENTER / ESC] Back to menu" if finished else
+                "Cancelling... finishing current operation" if cancel_event.is_set() else
+                "[ESC] Cancel training")
+        screen.blit(font.render(hint, True, COLOR_MUTED), (50, 600))
+        pygame.display.flip()
+
+
 def main_menu():
     selected = 0
     options = [
@@ -288,10 +362,9 @@ def main_menu():
                     elif selected == 2:
                         run_match("multiplayer")
                     elif selected == 3:
-                        status_msg = "Running Imitation Training on Movement..."
-                        pygame.display.flip()
-                        path = train_imitation()
-                        status_msg = f"Model saved: {os.path.basename(path)}" if path else "No logs found to train!"
+                        status_msg = run_imitation_gui()
+                        if status_msg is None:
+                            return
                     elif selected == 4:
                         base = model_browser("Select Model to Train / Fine-Tune", include_scratch=True)
                         if base:
