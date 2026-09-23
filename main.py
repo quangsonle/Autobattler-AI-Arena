@@ -76,7 +76,7 @@ def load_agent(choice):
         return m, "Scratch Model"
     
     m = ActorCritic(state_dim=44)
-    m.load_state_dict(torch.load(choice), strict=False)
+    m.load_state_dict(torch.load(choice, weights_only=True, map_location="cpu"), strict=False)
     m.eval()
     return m, os.path.basename(choice)
 

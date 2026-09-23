@@ -21,7 +21,7 @@ class InteractiveTrainer:
         self.model = ActorCritic(state_dim=44)
         self.model_name = "Scratch Model"
         if base_model_path and os.path.exists(base_model_path):
-            self.model.load_state_dict(torch.load(base_model_path), strict=False)
+            self.model.load_state_dict(torch.load(base_model_path, weights_only=True, map_location="cpu"), strict=False)
             self.model_name = os.path.basename(base_model_path)
 
         # Opponent (Player B - Red)
@@ -30,7 +30,7 @@ class InteractiveTrainer:
         self.greedy_bot_b = GreedyAI('B')
         if opponent_choice != "greedy" and opponent_choice and os.path.exists(opponent_choice):
             self.opponent_model = ActorCritic(state_dim=44)
-            self.opponent_model.load_state_dict(torch.load(opponent_choice), strict=False)
+            self.opponent_model.load_state_dict(torch.load(opponent_choice, weights_only=True, map_location="cpu"), strict=False)
             self.opponent_model.eval()
             self.opponent_name = os.path.basename(opponent_choice)
 

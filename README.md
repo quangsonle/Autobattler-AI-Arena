@@ -59,6 +59,22 @@ Ubuntu 23.04+ enforces virtual environments. Run these standard commands in your
    python3 main.py
    (You can also right-click main.py -> Open With -> Python Launcher).
 
+### Model file safety
+
+Use an up-to-date PyTorch release and upgrade existing installations with
+`python -m pip install --upgrade -r requirements.txt`.
+PyTorch 2.10.0 is the minimum because it fixes a model-loading vulnerability
+([CVE-2026-24747](https://github.com/pytorch/pytorch/security/advisories/GHSA-63cw-57p8-fm3p)).
+
+The game loads model weights with `weights_only=True` on the CPU. Only load
+`.pt` files from sources you trust: restricted loading reduces risk but does
+not make arbitrary model files safe. If a file fails restricted loading, do
+not bypass the error with `weights_only=False` or allowlist unknown functions.
+You can play against Greedy AI or another human without loading model files.
+
+To run the regression tests after installing the dependencies:
+`python -m unittest discover -s tests -v`.
+
 ## 4. Game Modes
 
 * Mode 1: Real Game (Agent vs Agent): Watch two trained neural networks battle autonomously. Select models from the file browser.
