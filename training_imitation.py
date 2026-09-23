@@ -8,6 +8,9 @@ from torch.utils.data import TensorDataset, DataLoader
 from model import ActorCritic
 from config import load_hyperparams
 
+class TrainingCancelled(Exception):
+    pass
+
 def augment_mirror_data(states_np, moves_np):
     """
     Applies exact bilateral reflection symmetry:
@@ -50,61 +53,35 @@ def augment_mirror_data(states_np, moves_np):
     
     return aug_states, aug_moves
 
-class TrainingCancelled(Exception):
-    """Raised when the UI requests cancellation before checkpoint saving."""
-
-
 def train_imitation(progress_callback=None, cancel_event=None):
-    """Train from logs, optionally reporting (fraction, message) to a caller.
+    if cancel_event is not None and cancel_event.is_set():
+        raise TrainingCancelled()
 
-    The callback runs on the training thread and must not call Pygame APIs.
-    """
-    last_report = 0.0
-
-    def check_cancelled():
-        if cancel_event is not None and cancel_event.is_set():
-            raise TrainingCancelled()
-
-    def report(fraction, message, force=False):
-        nonlocal last_report
-        check_cancelled()
-        now = time.monotonic()
-        if progress_callback is not None and (force or now - last_report >= 0.1):
-            progress_callback(fraction, message)
-            last_report = now
-
-    report(0.0, "Finding behavior logs...", force=True)
     params = load_hyperparams()
     records = glob.glob("recordings/*.npz")
     if not records:
-        print("[Imitation] No behavior logs found in recordings/! Play Mode 2 or 3 first.")
+        print("[Imitation] No behavior logs found in recordings/! Play Mode 2 or 3 first.", flush=True)
         return None
 
     raw_states, raw_moves = [], []
-    for index, r in enumerate(records):
-        check_cancelled()
-        with np.load(r) as data:
-            raw_states.append(data['states'])
-            raw_moves.append(data['move_actions'])
-        report(0.1 * (index + 1) / len(records),
-               f"Loading logs: {index + 1}/{len(records)}")
-
-    report(0.1, "Preparing mirrored training data...", force=True)
+    for r in records:
+        data = np.load(r)
+        raw_states.append(data['states'])
+        raw_moves.append(data['move_actions'])
 
     base_states = np.concatenate(raw_states)
     base_moves = np.concatenate(raw_moves)
 
-    # Apply Bilateral Mirror Augmentation
+    # Bilateral Mirror Augmentation
     aug_states, aug_moves = augment_mirror_data(base_states, base_moves)
 
     states = torch.tensor(aug_states, dtype=torch.float32)
     moves = torch.tensor(aug_moves, dtype=torch.int64)
 
-    check_cancelled()
     total_samples = len(states)
-    if total_samples == 0:
-        raise ValueError("Behavior logs contain no training frames.")
-    print(f"\n[Imitation] Base frames: {len(base_states)} -> Augmented dataset: {total_samples} frames (Exact 50/50 Symmetry)")
+    print("=" * 60, flush=True)
+    print(f"[Imitation] Base frames: {len(base_states)} -> Augmented: {total_samples} frames (50/50 Symmetry)", flush=True)
+    print("=" * 60, flush=True)
 
     dataset = TensorDataset(states, moves)
     loader = DataLoader(dataset, batch_size=params["imitation_batch_size"], shuffle=True)
@@ -115,46 +92,67 @@ def train_imitation(progress_callback=None, cancel_event=None):
     criterion = nn.CrossEntropyLoss()
 
     model.train()
-    epochs = params["imitation_epochs"]
-    if epochs < 1:
-        raise ValueError("Training epochs must be at least 1.")
-    total_batches = epochs * len(loader)
-    report(0.15, f"Training for {epochs} epochs...", force=True)
+    epochs = int(params["imitation_epochs"])
+    total_batches = len(loader)
+    total_steps = epochs * total_batches
+
+    epoch_history = []
+
     for ep in range(epochs):
-        total_loss = 0.0
+        epoch_loss = 0.0
         correct_move = 0
 
         for batch_index, (b_states, b_moves) in enumerate(loader):
-            check_cancelled()
+            if cancel_event is not None and cancel_event.is_set():
+                raise TrainingCancelled()
+
             optimizer.zero_grad()
             m_logits, _ = model(b_states)
             loss = criterion(m_logits, b_moves)
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
+            epoch_loss += loss.item()
             correct_move += (torch.argmax(m_logits, dim=-1) == b_moves).sum().item()
-            completed = ep * len(loader) + batch_index + 1
-            report(0.15 + 0.8 * completed / total_batches,
-                   f"Epoch {ep + 1}/{epochs} - Batch {batch_index + 1}/{len(loader)}")
 
-        avg_loss = total_loss / len(loader)
+            # Push live UI update every 4 batches
+            if progress_callback and (batch_index % 4 == 0 or (batch_index + 1) == total_batches):
+                step_num = ep * total_batches + (batch_index + 1)
+                fraction = step_num / float(total_steps)
+                curr_loss = epoch_loss / (batch_index + 1)
+                curr_acc = (correct_move / float((batch_index + 1) * params["imitation_batch_size"])) * 100.0
+                msg = f"Epoch {ep+1}/{epochs} | Batch {batch_index+1}/{total_batches} | Loss: {curr_loss:.4f} | Acc: {curr_acc:.1f}%"
+                progress_callback(fraction, msg)
+
+        avg_loss = epoch_loss / total_batches
         move_acc = (correct_move / total_samples) * 100.0
+        epoch_history.append((avg_loss, move_acc))
+        if ep % 10 ==0:
+       
+         print(f"  Epoch [{ep+1:3d}/{epochs:3d}] - Loss: {avg_loss:.4f} | Accuracy: {move_acc:.1f}%", flush=True)
 
-        if (ep + 1) % max(1, epochs // 6) == 0 or (ep + 1) == epochs:
-            print(f"  Epoch [{ep+1:2d}/{epochs}] - Loss: {avg_loss:.4f} | Symmetrical Accuracy: {move_acc:.1f}%")
+    if cancel_event is not None and cancel_event.is_set():
+        raise TrainingCancelled()
 
-    report(0.95, "Saving trained model...", force=True)
     os.makedirs("saved_models", exist_ok=True)
     out_path = f"saved_models/imitation_model_{int(time.time())}.pt"
     torch.save(model.state_dict(), out_path)
     torch.save(model.state_dict(), "saved_models/latest_model.pt")
-    # Also save over finetuned_model.pt so all modes use the balanced baseline
     torch.save(model.state_dict(), "saved_models/finetuned_model.pt")
-    print(f"[Imitation] Successfully saved balanced model to:\n  -> {out_path}\n")
-    # Saving is allowed to finish even if cancellation arrives during writes.
-    if progress_callback is not None:
-        progress_callback(1.0, "Training complete")
+
+    initial_acc = epoch_history[0][1]
+    final_acc = epoch_history[-1][1]
+    gain = final_acc - initial_acc
+
+    print("=" * 60, flush=True)
+    print(f"[Training Complete] Initial Acc: {initial_acc:.1f}% -> Final Acc: {final_acc:.1f}% (+{gain:.1f}% gain)", flush=True)
+    print(f"[Saved Model] -> {out_path}", flush=True)
+    print("=" * 60 + "\n", flush=True)
+
+    # Show the learning progress in the final UI message
+    if progress_callback:
+        progress_callback(1.0, f"Learned: {initial_acc:.1f}% -> {final_acc:.1f}% (+{gain:.1f}% Gain) | Saved: {os.path.basename(out_path)}")
+
     return out_path
 
 if __name__ == "__main__":
