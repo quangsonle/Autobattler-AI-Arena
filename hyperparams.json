@@ -1,11 +1,11 @@
 {
     "imitation_lr": 0.001,
-    "imitation_epochs": 145,
+    "imitation_epochs": 300,
     "imitation_batch_size": 32,
     "rl_lr": 0.0002,
     "rl_epochs_per_feedback": 10,
     "gamma": 0.96,
-    "exploration_rate": 0.5,
+    "exploration_rate": 0.25,
     "exploration_temp": 3.0,
     "ppo_clip": 0.15,
     "feedback_magnitude": 5.0
